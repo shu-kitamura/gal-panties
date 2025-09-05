@@ -1,0 +1,17 @@
+[package]
+name = "woolong-ebpf"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+woolong-common = { path = "../woolong-common" }
+
+aya-ebpf = { workspace = true }
+aya-log-ebpf = { workspace = true }
+
+[build-dependencies]
+which = { workspace = true }
+
+[[bin]]
+name = "woolong"
+path = "src/main.rs"

@@ -6,7 +6,6 @@ use aya_log_ebpf::info;
 
 #[xdp]
 pub fn woolong(ctx: XdpContext) -> u32 {
-    info!(&ctx, "woolong called");
     match try_woolong(ctx) {
         Ok(ret) => ret,
         Err(_) => xdp_action::XDP_ABORTED,

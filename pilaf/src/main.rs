@@ -1,7 +1,7 @@
 use std::io::{self, BufRead, Read, Write};
 use std::net::TcpStream;
 
-const HOST: &str = "172.29.49.161";
+const HOST: &str = "172.10.10.77";
 const PORT: &str = "7777";
 
 fn main() -> std::io::Result<()> {

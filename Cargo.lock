@@ -42,6 +42,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b34d609dfbaf33d6889b2b7106d3ca345eacad44200913df5ba02bfd31d2ba9"
 
 [[package]]
+name = "autocfg"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
+
+[[package]]
 name = "aya"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -430,6 +436,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
 
 [[package]]
+name = "memoffset"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -447,6 +462,15 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "network-types"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f06f1863cb5565864300c6bfb012312969908878d2ca5881eaf0bbdb8b519c23"
+dependencies = [
+ "memoffset",
 ]
 
 [[package]]
@@ -939,6 +963,7 @@ version = "0.1.0"
 dependencies = [
  "aya-ebpf",
  "aya-log-ebpf",
+ "network-types",
  "which",
  "woolong-common",
 ]

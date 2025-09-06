@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
-const HOST: &str = "127.0.0.1";
+const HOST: &str = "172.29.49.161";
 const PORT: &str = "7777";
 
 fn main() -> std::io::Result<()> {

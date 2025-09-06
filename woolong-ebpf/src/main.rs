@@ -1,8 +1,7 @@
 #![no_std]
 #![no_main]
 
-use aya_ebpf::{bindings::xdp_action, macros::xdp, programs::XdpContext};
-use aya_log_ebpf::info;
+use aya_ebpf::{bindings::xdp_action, helpers::r#gen::bpf_csum_diff, macros::xdp, programs::XdpContext};
 use core::mem;
 use network_types::{
     eth::{EthHdr, EtherType},
@@ -11,6 +10,7 @@ use network_types::{
 };
 
 const SHENRON_WORD_SLICE: &[u8] = "願いを言え。どんな願いもひとつだけ叶えてやろう".as_bytes();
+const WOOLONG_WORD_SLICE: &[u8] = "ギャルのパンティおくれーーーーーーっ！！！！！".as_bytes();
 
 #[xdp]
 pub fn woolong(ctx: XdpContext) -> u32 {
@@ -20,7 +20,6 @@ pub fn woolong(ctx: XdpContext) -> u32 {
     }
 }
 
-#[inline(always)]
 fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {
     let start = ctx.data();
     let end = ctx.data_end();
@@ -44,16 +43,14 @@ fn try_woolong(ctx: XdpContext) -> Result<u32, ()> {
     let tcphdr: *const TcpHdr = get_tcphdr(&ctx, ipv4hdr).ok_or(())?;
     let payload_offset = EthHdr::LEN + Ipv4Hdr::LEN + TcpHdr::LEN + 12;
 
-    let (source_port, dest_port) = get_ports(tcphdr);
+    let (source_port, _dest_port) = get_ports(tcphdr);
 
     if source_port == 7777  {
         if payload_eq_slice(&ctx, payload_offset, SHENRON_WORD_SLICE) {
-            info!(&ctx, "payload_eq_slice matched");
-            info!(&ctx, "SRC PORT: {}, DST PORT: {}", source_port, dest_port);
+            rewrite_payload(&ctx, WOOLONG_WORD_SLICE)?;
             swap_ports(tcphdr);
-            let (swaped_source_port, swapped_dest_port) = get_ports(tcphdr);
-            info!(&ctx, "SWAPED SRC PORT: {}, SWAPED DST PORT: {}", swaped_source_port, swapped_dest_port);
-            return Ok(xdp_action::XDP_PASS);
+            rewrite_tcp_checksum(&ctx, tcphdr, payload_offset, SHENRON_WORD_SLICE.len(), WOOLONG_WORD_SLICE)?;
+            return Ok(xdp_action::XDP_TX);
         }
     }
     Ok(xdp_action::XDP_PASS)
@@ -87,7 +84,7 @@ fn swap_ports(tcphdr: *const TcpHdr) {
     unsafe { (*(tcphdr as *mut TcpHdr)).dest = src_port; }
 }
 
-pub fn payload_eq_slice(ctx: &XdpContext, off: usize, pat: &[u8]) -> bool {
+fn payload_eq_slice(ctx: &XdpContext, off: usize, pat: &[u8]) -> bool {
     let start = ctx.data();
     let end = ctx.data_end();
     let n = pat.len();
@@ -105,6 +102,53 @@ pub fn payload_eq_slice(ctx: &XdpContext, off: usize, pat: &[u8]) -> bool {
         i += 1;
     }
     true
+}
+
+fn rewrite_payload(ctx: &XdpContext, new: &[u8]) -> Result<(), ()> {
+    let start = ctx.data();
+    // let end = ctx.data_end();
+
+    let payload_offset = EthHdr::LEN + Ipv4Hdr::LEN + TcpHdr::LEN + 12;
+    
+    if new.len() != SHENRON_WORD_SLICE.len() { return Err(()) }
+
+    let mut i = 0usize;
+    while i < SHENRON_WORD_SLICE.len() {
+        let np = unsafe { *new.get_unchecked(i) };
+        unsafe { core::ptr::write_unaligned((start + payload_offset + i) as *mut u8, np); }
+        i += 1;
+    };
+    Ok(())
+}
+
+fn rewrite_tcp_checksum(
+    ctx: &XdpContext,
+    tcphdr: *const TcpHdr,
+    payload_offset: usize,
+    old_len: usize,
+    new: &[u8]
+) -> Result<(), ()> {
+    if new.len() != old_len { return Err(()); }
+
+    let start = ctx.data();
+    let end = ctx.data_end();
+    if start + payload_offset + old_len > end { return Err(()); }
+
+    let old_checksum = u16::from_be_bytes(unsafe { (*tcphdr).check });
+
+    let seed = !old_checksum as u32;
+    let from = (start + payload_offset) as *mut u32;
+    let to = new.as_ptr() as *mut u32;
+
+    let csum = unsafe { bpf_csum_diff(from, old_len as u32, to, new.len() as u32, seed) };
+
+    if csum < 0 {
+        return Err(());
+    }
+
+    let new_checksum = (!(csum as u32) as u16).to_be_bytes();
+    unsafe { (*(tcphdr as *mut TcpHdr)).check = new_checksum; }
+    Ok(())
 }
 
 #[cfg(not(test))]

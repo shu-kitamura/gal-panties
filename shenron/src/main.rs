@@ -42,7 +42,7 @@ fn main() -> std::io::Result<()> {
             println!("> {}", String::from_utf8_lossy(&buf[..n]));
 
             if !is_call_success {
-                let response = "願いを言え";
+                let response = "願いを言え。どんな願いもひとつだけ叶えてやろう";
                 println!("{}", response);
                 stream.write_all(response.as_bytes()).unwrap();
                 is_call_success = true;

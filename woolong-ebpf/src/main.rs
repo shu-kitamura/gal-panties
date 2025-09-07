@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use aya_ebpf::{bindings::xdp_action, helpers::r#gen::bpf_csum_diff, macros::xdp, programs::XdpContext};
+use aya_ebpf::{bindings::xdp_action, macros::xdp, programs::XdpContext};
 use core::mem;
 use network_types::{
     eth::{EthHdr, EtherType},
@@ -16,7 +16,7 @@ const WOOLONG_WORD_SLICE: &[u8] = "ギャルのパンティおくれーーーー
 pub fn woolong(ctx: XdpContext) -> u32 {
     match try_woolong(ctx) {
         Ok(ret) => ret,
-        Err(_) => xdp_action::XDP_ABORTED,
+        Err(_) => xdp_action::XDP_PASS,
     }
 }
 
@@ -47,9 +47,14 @@ fn try_woolong(ctx: XdpContext) -> Result<u32, ()> {
 
     if source_port == 7777  {
         if payload_eq_slice(&ctx, payload_offset, SHENRON_WORD_SLICE) {
-            rewrite_payload(&ctx, WOOLONG_WORD_SLICE)?;
+            swap_macaddrs(ethhdr);
+            swap_ipv4addrs(ipv4hdr);
             swap_ports(tcphdr);
-            rewrite_tcp_checksum(&ctx, tcphdr, payload_offset, SHENRON_WORD_SLICE.len(), WOOLONG_WORD_SLICE)?;
+            rewrite_payload(&ctx, WOOLONG_WORD_SLICE)?;
+            rewrite_seq_ack(tcphdr, WOOLONG_WORD_SLICE.len())?;
+            rewrite_flags(tcphdr)?;
+            // reculc_ipv4_csum(ipv4hdr);
+            // reculc_tcp_csum(&ctx, ipv4hdr, tcphdr)?;
             return Ok(xdp_action::XDP_TX);
         }
     }
@@ -74,6 +79,22 @@ fn get_ports(tcphdr: *const TcpHdr) -> (u16, u16) {
     let src_port: u16 = u16::from_be_bytes(unsafe { (*tcphdr).source });
     let dst_port: u16 = u16::from_be_bytes(unsafe { (*tcphdr).dest });
     (src_port, dst_port)
+}
+
+fn swap_macaddrs(ethhdr: *const EthHdr) {
+    let src_mac = unsafe { (*ethhdr).src_addr };
+    let dst_mac = unsafe { (*ethhdr).dst_addr };
+
+    unsafe { (*(ethhdr as *mut EthHdr)).src_addr = dst_mac; }
+    unsafe { (*(ethhdr as *mut EthHdr)).dst_addr = src_mac; }
+}
+
+fn swap_ipv4addrs(ipv4hdr: *const Ipv4Hdr) {
+    let src_ip = unsafe { (*ipv4hdr).src_addr };
+    let dst_ip = unsafe { (*ipv4hdr).dst_addr };
+
+    unsafe { (*(ipv4hdr as *mut Ipv4Hdr)).src_addr = dst_ip; }
+    unsafe { (*(ipv4hdr as *mut Ipv4Hdr)).dst_addr = src_ip; }
 }
 
 fn swap_ports(tcphdr: *const TcpHdr) {
@@ -106,11 +127,15 @@ fn payload_eq_slice(ctx: &XdpContext, off: usize, pat: &[u8]) -> bool {
 
 fn rewrite_payload(ctx: &XdpContext, new: &[u8]) -> Result<(), ()> {
     let start = ctx.data();
-    // let end = ctx.data_end();
+    let end = ctx.data_end();
 
     let payload_offset = EthHdr::LEN + Ipv4Hdr::LEN + TcpHdr::LEN + 12;
     
     if new.len() != SHENRON_WORD_SLICE.len() { return Err(()) }
+
+    if start + payload_offset + SHENRON_WORD_SLICE.len() > end {
+        return Err(());
+    }
 
     let mut i = 0usize;
     while i < SHENRON_WORD_SLICE.len() {
@@ -121,33 +146,29 @@ fn rewrite_payload(ctx: &XdpContext, new: &[u8]) -> Result<(), ()> {
     Ok(())
 }
 
-fn rewrite_tcp_checksum(
-    ctx: &XdpContext,
-    tcphdr: *const TcpHdr,
-    payload_offset: usize,
-    old_len: usize,
-    new: &[u8]
-) -> Result<(), ()> {
-    if new.len() != old_len { return Err(()); }
+fn rewrite_seq_ack(tcphdr: *const TcpHdr, payload_len: usize) -> Result<(), ()> {
+    let old_seq = u32::from_be_bytes(unsafe { (*tcphdr).seq });
+    let old_ack = u32::from_be_bytes(unsafe { (*tcphdr).ack_seq });
 
-    let start = ctx.data();
-    let end = ctx.data_end();
-    if start + payload_offset + old_len > end { return Err(()); }
+    let syn = unsafe { (*tcphdr).syn() != 0 };
+    let fin = unsafe { (*tcphdr).fin() != 0 };
+    let inc = payload_len + if syn { 1 } else { 0 } + if fin { 1 } else { 0 };
 
-    let old_checksum = u16::from_be_bytes(unsafe { (*tcphdr).check });
+    let new_seq = old_ack;
+    let new_ack = old_seq.wrapping_add(inc as u32);
 
-    let seed = !old_checksum as u32;
-    let from = (start + payload_offset) as *mut u32;
-    let to = new.as_ptr() as *mut u32;
+    unsafe { (*(tcphdr as *mut TcpHdr)).seq = new_seq.to_be_bytes(); }
+    unsafe { (*(tcphdr as *mut TcpHdr)).ack_seq = new_ack.to_be_bytes(); }
+    Ok(())
+}
 
-    let csum = unsafe { bpf_csum_diff(from, old_len as u32, to, new.len() as u32, seed) };
-
-    if csum < 0 {
-        return Err(());
+fn rewrite_flags(tcphdr: *const TcpHdr) -> Result<(), ()> {
+    unsafe {
+        (*(tcphdr as *mut TcpHdr)).set_syn(0);
+        (*(tcphdr as *mut TcpHdr)).set_fin(0);
+        (*(tcphdr as *mut TcpHdr)).set_ack(1);
+        (*(tcphdr as *mut TcpHdr)).set_rst(0);
     }
-
-    let new_checksum = (!(csum as u32) as u16).to_be_bytes();
-    unsafe { (*(tcphdr as *mut TcpHdr)).check = new_checksum; }
     Ok(())
 }
 

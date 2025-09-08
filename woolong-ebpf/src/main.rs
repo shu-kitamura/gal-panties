@@ -61,6 +61,11 @@ fn load_u8(p: *const u8) -> u8 {
     unsafe { core::ptr::read_unaligned(p) }
 }
 
+#[inline(always)]
+fn load_u64(p: *const u8) -> u64 {
+    unsafe { core::ptr::read_unaligned(p as *const u64) }
+}
+
 fn add_carry(sum:u32, w: u16) -> u32 {
     let s = sum + w as u32;
     (s & 0xffff) + (s >> 16)
@@ -119,23 +124,20 @@ fn swap_ports(tcphdr: *const TcpHdr) {
 }
 
 fn payload_eq_slice(ctx: &XdpContext, off: usize, pat: &[u8]) -> bool {
+    if pat.len() < 8 { return false; }
+
     let start = ctx.data();
     let end = ctx.data_end();
-    let n = pat.len();
 
-    // ★ これが肝：使う前に n バイト分まとめて境界チェック
-    if start + off + n > end { return false; }
-
-    let mut i = 0usize;
-    // 自前ループ（memcmp を呼ばせない＆境界は上で証明済み）
-    while i < n {
-        let b_pkt = load_u8((start + off + i) as *const u8);
-        // pat[i] は bounds チェックで panic 経路が入るので get_unchecked を使う
-        let b_pat = unsafe { *pat.get_unchecked(i) };
-        if b_pkt != b_pat { return false; }
-        i += 1;
+    let p = start + off;
+    if p + 8 > end {
+        return false;
     }
-    true
+    
+    let payload_head = load_u64(p as *const u8);
+    let pattern_head = load_u64(pat.as_ptr());
+
+    payload_head == pattern_head
 }
 
 fn rewrite_payload(ctx: &XdpContext, new: &[u8]) -> Result<(), ()> {

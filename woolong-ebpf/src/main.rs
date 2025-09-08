@@ -57,11 +57,6 @@ fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {
 }
 
 #[inline(always)]
-fn load_u8(p: *const u8) -> u8 {
-    unsafe { core::ptr::read_unaligned(p) }
-}
-
-#[inline(always)]
 fn load_u64(p: *const u8) -> u64 {
     unsafe { core::ptr::read_unaligned(p as *const u64) }
 }
@@ -88,7 +83,10 @@ fn get_ipv4hdr(ctx: &XdpContext, ethhdr: *const EthHdr) -> Option<*const Ipv4Hdr
 
 fn get_tcphdr(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr) -> Option<*const TcpHdr> {
     match unsafe { (*ipv4hdr).proto } {
-        IpProto::Tcp => ptr_at(ctx, EthHdr::LEN + Ipv4Hdr::LEN).ok(),
+        IpProto::Tcp => {
+            let ihl = ((unsafe { (*ipv4hdr).vihl } & 0x0f) as usize) * 4;
+            ptr_at(ctx, EthHdr::LEN + ihl).ok()
+        }
         _ => None // 今回は TCP 以外は考慮しない
     }
 }
@@ -214,36 +212,58 @@ fn get_tcp_length(ipv4hdr: *const Ipv4Hdr) -> u16 {
 }
 
 fn get_tcp_csum(ctx: &XdpContext,ipv4hdr: *const Ipv4Hdr, tcphdr: *const TcpHdr) -> Result<u32, ()> {
-    let start = ctx.data();
-    let end = ctx.data_end();
-    let tcp_length = get_tcp_length(ipv4hdr) as usize;
+    let start = ctx.data() as u32;
+    let end = ctx.data_end() as u32;
+    let frame_len = end - start;
 
-    if start + EthHdr::LEN + Ipv4Hdr::LEN + tcp_length > end {
+    let ipv4_start = start + EthHdr::LEN as u32;
+    let ip_room = end - ipv4_start;
+
+    let ihv_words = (unsafe { (*ipv4hdr).vihl } & 0x0f) as u32;
+    if ihv_words < 5 || ihv_words > 15 { return Err(()); }
+    let ihv = ihv_words * 4;
+    
+    let tot_len = u16::from_be_bytes(unsafe { (*ipv4hdr).tot_len }) as u32;
+
+    if tot_len < ihv + TcpHdr::LEN as u32 { return Err(()); }
+    if tot_len > ip_room { return Err(()); }
+
+    let tcp_offset: u32 = EthHdr::LEN  as u32 + ihv;
+    if tcp_offset > frame_len {
         return Err(());
     }
 
+    let tcp_room = frame_len - tcp_offset;
+
+    let tcp_start = start + tcp_offset;
+    let tcp_length: u32 = tot_len - ihv;
+    if tcp_length > tcp_room {
+        return Err(());
+    }
+
+    if tcp_length > end - tcp_start {
+        return Err(());
+    }
+
+    let to_size = tcp_length & 0x7fff_ffffu32;
 
     unsafe { (*(tcphdr as *mut TcpHdr)).check = [0, 0]; }
-    let mut sum: u32 = 0;
-    let mut i: usize = 0;
 
-    while i + 1 < tcp_length {
-        let w = u16::from_be_bytes([
-            load_u8((start + EthHdr::LEN + Ipv4Hdr::LEN + i) as *const u8),
-            load_u8((start + EthHdr::LEN + Ipv4Hdr::LEN + i + 1) as *const u8),
-        ]);
-        sum = add_carry(sum, w);
-        i += 2;
-    }
-
-    if i < tcp_length {
-        let w = u16::from_be_bytes([
-            load_u8((start + EthHdr::LEN + Ipv4Hdr::LEN + i) as *const u8),
+    let tcp_sum = unsafe {
+        bpf_csum_diff(
+            core::ptr::null_mut(),
             0,
-        ]);
-        sum = add_carry(sum, w);
+            tcp_start as *mut u32,
+            to_size,
+            0
+        )
+    };
+
+    if tcp_sum < 0 {
+        return Err(());
     }
-    Ok(sum)
+
+    Ok(tcp_sum as u32)
 }
 
 fn recalc_tcp_csum(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr, tcphdr: *const TcpHdr) -> Result<(), ()> {

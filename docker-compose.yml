@@ -4,6 +4,11 @@ services:
       context: .
       dockerfile: docker/server.Dockerfile
     container_name: server
+    privileged: true
+    sysctls:
+      net.ipv4.tcp_timestamps: "0"
+    environment:
+      PATH: "/work/target/debug:${PATH}"
     networks:
       shenet:
         ipv4_address: 172.10.10.77
@@ -12,7 +17,6 @@ services:
       - ./:/work
     tty: true
     stdin_open: true
-    # 自動実行はしない
     command: [ "bash", "-lc", "sleep infinity" ]
 
   client:
@@ -20,13 +24,11 @@ services:
       context: .
       dockerfile: docker/client.Dockerfile
     container_name: client
-    privileged: true   # XDP attach のため。可能なら cap_add でもOK
-    # cap_add:
-    #   - NET_ADMIN
-    #   - SYS_ADMIN
-    #   - SYS_RESOURCE
-    # security_opt:
-    #   - apparmor:unconfined
+    privileged: true
+    sysctls:
+      net.ipv4.tcp_timestamps: "0"
+    environment:
+      PATH: "/work/target/debug:${PATH}"
     networks:
       shenet:
         ipv4_address: 172.10.10.78

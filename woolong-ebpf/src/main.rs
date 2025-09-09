@@ -25,7 +25,7 @@ fn try_woolong(ctx: XdpContext) -> Result<u32, ()> {
     let ethhdr: *const EthHdr = ptr_at(&ctx, 0)?;
     let ipv4hdr: *const Ipv4Hdr = get_ipv4hdr(&ctx, ethhdr).ok_or(())?;
     let tcphdr: *const TcpHdr = get_tcphdr(&ctx, ipv4hdr).ok_or(())?;
-    let payload_offset = EthHdr::LEN + Ipv4Hdr::LEN + TcpHdr::LEN + 12;
+    let payload_offset = EthHdr::LEN + Ipv4Hdr::LEN + TcpHdr::LEN;
 
     let (source_port, _dest_port) = get_ports(tcphdr);
 
@@ -145,7 +145,7 @@ fn rewrite_payload(ctx: &XdpContext, new: &[u8]) -> Result<(), ()> {
     let start = ctx.data();
     let end = ctx.data_end();
 
-    let payload_offset = EthHdr::LEN + Ipv4Hdr::LEN + TcpHdr::LEN + 12;
+    let payload_offset = EthHdr::LEN + Ipv4Hdr::LEN + TcpHdr::LEN;
     
     if new.len() != SHENRON_WORD_SLICE.len() { return Err(()) }
 
@@ -219,7 +219,7 @@ fn get_tcp_csum(ctx: &XdpContext) -> Result<u32, ()> {
     let end = ctx.data_end();
 
     let tcp_offset = EthHdr::LEN + Ipv4Hdr::LEN;
-    let tcp_length = TcpHdr::LEN + 12 + WOOLONG_WORD_SLICE.len();
+    let tcp_length = TcpHdr::LEN + WOOLONG_WORD_SLICE.len();
     let tcphdr: *const TcpHdr = ptr_at(ctx, tcp_offset)?;
 
     if start + tcp_offset + tcp_length > end {

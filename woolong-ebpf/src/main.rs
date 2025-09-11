@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use aya_ebpf::{bindings::xdp_action, helpers::r#gen::bpf_csum_diff, macros::xdp, programs::XdpContext};
+use aya_ebpf::{bindings::xdp_action, helpers::r#gen::bpf_csum_diff, macros::{map, xdp}, maps::PerfEventByteArray, programs::XdpContext};
 use aya_log_ebpf::info;
 use core::mem;
 use network_types::{
@@ -12,6 +12,9 @@ use network_types::{
 
 const SHENRON_WORD_SLICE: &[u8] = "願いを言え。どんな願いもひとつだけ叶えてやろう".as_bytes();
 const WOOLONG_WORD_SLICE: &[u8] = "ギャルのパンティおくれーーーーーーっ！！！！！".as_bytes();
+
+#[map(name = "EVENTS")]
+static EVENTS: PerfEventByteArray = PerfEventByteArray::new(0);
 
 #[xdp]
 pub fn woolong(ctx: XdpContext) -> u32 {
@@ -34,10 +37,11 @@ fn try_woolong(ctx: XdpContext) -> Result<u32, ()> {
         swap_ipv4addrs(ipv4hdr);
         swap_ports(tcphdr);
         rewrite_payload(&ctx, WOOLONG_WORD_SLICE)?;
-        rewrite_seq_ack(&ctx, tcphdr, WOOLONG_WORD_SLICE.len())?;
+        rewrite_seq_ack(tcphdr, WOOLONG_WORD_SLICE.len())?;
         rewrite_flags(tcphdr)?;
         recalc_ipv4_csum(ipv4hdr);
         recalc_tcp_csum(&ctx, ipv4hdr, tcphdr)?;
+        send_data_for_user(&ctx);
         return Ok(xdp_action::XDP_TX);
     }
     Ok(xdp_action::XDP_PASS)
@@ -158,7 +162,7 @@ fn rewrite_payload(ctx: &XdpContext, new: &[u8]) -> Result<(), ()> {
     Ok(())
 }
 
-fn rewrite_seq_ack(ctx: &XdpContext, tcphdr: *const TcpHdr, payload_len: usize) -> Result<(), ()> {
+fn rewrite_seq_ack(tcphdr: *const TcpHdr, payload_len: usize) -> Result<(), ()> {
     let old_seq = u32::from_be_bytes(unsafe { (*tcphdr).seq });
     let old_ack = u32::from_be_bytes(unsafe { (*tcphdr).ack_seq });
 
@@ -168,8 +172,6 @@ fn rewrite_seq_ack(ctx: &XdpContext, tcphdr: *const TcpHdr, payload_len: usize) 
 
     let new_seq = old_ack;
     let new_ack = old_seq.wrapping_add(inc as u32);
-
-    info!(ctx, "old_seq: {}, old_ack: {}, new_seq: {}, new_ack: {}, inc: {}", old_seq, old_ack, new_seq, new_ack, inc);
 
     unsafe { (*(tcphdr as *mut TcpHdr)).seq = new_seq.to_be_bytes(); }
     unsafe { (*(tcphdr as *mut TcpHdr)).ack_seq = new_ack.to_be_bytes(); }
@@ -272,6 +274,23 @@ fn recalc_ipv4_csum(ipv4hdr: *const Ipv4Hdr) {
         let new = fold_csum(csum as u32);
         unsafe { (*(ipv4hdr as *mut Ipv4Hdr)).set_checksum(new); };
     }
+}
+
+fn send_data_for_user(ctx: &XdpContext) {
+    let data     = ctx.data() as usize;
+    let data_end = ctx.data_end() as usize;
+    let pkt_len  = data_end - data;
+
+    let mut buf = [0u8; 256];
+    if data + pkt_len > data_end || pkt_len > buf.len() {
+        return
+    }
+
+    unsafe {
+        let _ = core::ptr::copy_nonoverlapping(data as *const u8, buf.as_mut_ptr(), pkt_len);
+    }
+    let slice = &buf[..pkt_len];
+    EVENTS.output(ctx, slice, 0);
 }
 
 #[cfg(not(test))]

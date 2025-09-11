@@ -941,6 +941,7 @@ dependencies = [
  "aya",
  "aya-build",
  "aya-log",
+ "bytes",
  "clap",
  "env_logger",
  "libc",

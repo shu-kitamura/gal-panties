@@ -29,20 +29,16 @@ fn try_woolong(ctx: XdpContext) -> Result<u32, ()> {
 
     let (source_port, _dest_port) = get_ports(tcphdr);
 
-    if source_port == 7777  {
-        if payload_eq_slice(&ctx, payload_offset, SHENRON_WORD_SLICE) {
-            swap_macaddrs(ethhdr);
-            swap_ipv4addrs(ipv4hdr);
-            swap_ports(tcphdr);
-            let (src, dst) = get_ports(tcphdr);
-            info!(&ctx, "src: {}, dst: {}", src, dst);
-            rewrite_payload(&ctx, WOOLONG_WORD_SLICE)?;
-            rewrite_seq_ack(tcphdr, WOOLONG_WORD_SLICE.len())?;
-            rewrite_flags(tcphdr)?;
-            recalc_ipv4_csum(ipv4hdr);
-            recalc_tcp_csum(&ctx, ipv4hdr, tcphdr)?;
-            return Ok(xdp_action::XDP_TX);
-        }
+    if source_port == 7777 && payload_eq_slice(&ctx, payload_offset, SHENRON_WORD_SLICE) {
+        swap_macaddrs(ethhdr);
+        swap_ipv4addrs(ipv4hdr);
+        swap_ports(tcphdr);
+        rewrite_payload(&ctx, WOOLONG_WORD_SLICE)?;
+        rewrite_seq_ack(&ctx, tcphdr, WOOLONG_WORD_SLICE.len())?;
+        rewrite_flags(tcphdr)?;
+        recalc_ipv4_csum(ipv4hdr);
+        recalc_tcp_csum(&ctx, ipv4hdr, tcphdr)?;
+        return Ok(xdp_action::XDP_TX);
     }
     Ok(xdp_action::XDP_PASS)
 }
@@ -162,7 +158,7 @@ fn rewrite_payload(ctx: &XdpContext, new: &[u8]) -> Result<(), ()> {
     Ok(())
 }
 
-fn rewrite_seq_ack(tcphdr: *const TcpHdr, payload_len: usize) -> Result<(), ()> {
+fn rewrite_seq_ack(ctx: &XdpContext, tcphdr: *const TcpHdr, payload_len: usize) -> Result<(), ()> {
     let old_seq = u32::from_be_bytes(unsafe { (*tcphdr).seq });
     let old_ack = u32::from_be_bytes(unsafe { (*tcphdr).ack_seq });
 
@@ -172,6 +168,8 @@ fn rewrite_seq_ack(tcphdr: *const TcpHdr, payload_len: usize) -> Result<(), ()> 
 
     let new_seq = old_ack;
     let new_ack = old_seq.wrapping_add(inc as u32);
+
+    info!(ctx, "old_seq: {}, old_ack: {}, new_seq: {}, new_ack: {}, inc: {}", old_seq, old_ack, new_seq, new_ack, inc);
 
     unsafe { (*(tcphdr as *mut TcpHdr)).seq = new_seq.to_be_bytes(); }
     unsafe { (*(tcphdr as *mut TcpHdr)).ack_seq = new_ack.to_be_bytes(); }
@@ -230,7 +228,7 @@ fn get_tcp_csum(ctx: &XdpContext) -> Result<u32, ()> {
 
     let tcp_sum = unsafe {
         bpf_csum_diff(
-            core::ptr::null_mut(),
+            0 as *mut u32,
             0,
             tcphdr as *mut u32,
             tcp_length as u32,
@@ -249,6 +247,8 @@ fn recalc_tcp_csum(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr, tcphdr: *const Tcp
     let pseudo_sum = get_pseudo_header(ipv4hdr);
     let tcp_sum = get_tcp_csum(ctx)?;
 
+    unsafe { (*(tcphdr as *mut TcpHdr)).check = [0, 0]; }
+
     let total = pseudo_sum + tcp_sum;
     let csum = fold_csum(total);
 
@@ -257,20 +257,20 @@ fn recalc_tcp_csum(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr, tcphdr: *const Tcp
 }
 
 fn recalc_ipv4_csum(ipv4hdr: *const Ipv4Hdr) {
-    unsafe { (*(ipv4hdr as *mut Ipv4Hdr)).check = [0, 0]; }
-    let ihl_bytes = ((unsafe { (*ipv4hdr).vihl } & 0x0f) as usize) * 4;
+    unsafe { (*(ipv4hdr as *mut Ipv4Hdr)).set_checksum(0) };
+    // let ihl_bytes = ((unsafe { (*ipv4hdr).vihl } & 0x0f) as usize) * 4;
     let csum = unsafe {
         bpf_csum_diff(
-            core::ptr::null_mut(),
+            0 as *mut u32,
             0,
             ipv4hdr as *mut u32,
-            ihl_bytes as u32,
+            Ipv4Hdr::LEN as u32,
             0
         )
     };
     if csum >= 0 {
-        let new = fold_csum(csum as u32).to_be_bytes();
-        unsafe { (*(ipv4hdr as *mut Ipv4Hdr)).check = new };
+        let new = fold_csum(csum as u32);
+        unsafe { (*(ipv4hdr as *mut Ipv4Hdr)).set_checksum(new); };
     }
 }
 

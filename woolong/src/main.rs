@@ -1,5 +1,6 @@
 use anyhow::Context as _;
-use aya::programs::{Xdp, XdpFlags};
+use aya::{maps::AsyncPerfEventArray, programs::{Xdp, XdpFlags}, util::online_cpus};
+use bytes::BytesMut;
 use clap::Parser;
 #[rustfmt::skip]
 use log::{debug, warn};
@@ -43,11 +44,40 @@ async fn main() -> anyhow::Result<()> {
     let Opt { iface } = opt;
     let program: &mut Xdp = ebpf.program_mut("woolong").unwrap().try_into()?;
     program.load()?;
-    program.attach(&iface, XdpFlags::DRV_MODE)
+    program.attach(&iface, XdpFlags::default())
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
+
+    let mut perf_array = AsyncPerfEventArray::try_from(ebpf.take_map("EVENTS").unwrap())?;
 
     let ctrl_c = signal::ctrl_c();
     println!("Waiting for Ctrl-C...");
+
+    for cpu_id in online_cpus().map_err(|(_, e)| e)? {
+        let mut buf = perf_array.open(cpu_id, None)?;
+
+        tokio::task::spawn(async move {
+            let mut buffers = (0..10)
+                .map(|_| BytesMut::with_capacity(1024))
+                .collect::<Vec<_>>();
+            loop {
+                let events = buf.read_events(&mut buffers).await.unwrap();
+                println!("event");
+                for buffer in buffers.iter_mut().take(events.read) {
+                    let ptr = buffer.as_ptr() as *const woolong_common::Packet;
+                    let packet = unsafe { ptr.read_unaligned() };
+                    let mut data_str = String::new();
+                    for i in 0..packet.data.len() {
+                        data_str += &format!("{:02x} ", packet.data[i]);
+                        if i % 16 == 15 {
+                            data_str += "\n";
+                        }
+                    }
+                    println!("{}", data_str);
+                }
+            }
+        });
+    }
+
     ctrl_c.await?;
     println!("Exiting...");
 

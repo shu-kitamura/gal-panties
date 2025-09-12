@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use aya_ebpf::{bindings::xdp_action, helpers::r#gen::bpf_csum_diff, macros::{map, xdp}, maps::PerfEventByteArray, programs::XdpContext};
+use aya_ebpf::{bindings::xdp_action, macros::{map, xdp}, maps::PerfEventArray, programs::XdpContext};
 use aya_log_ebpf::info;
 use core::mem;
 use network_types::{
@@ -10,11 +10,13 @@ use network_types::{
     tcp::TcpHdr,
 };
 
+use woolong_common::Packet;
+
 const SHENRON_WORD_SLICE: &[u8] = "願いを言え。どんな願いもひとつだけ叶えてやろう".as_bytes();
 const WOOLONG_WORD_SLICE: &[u8] = "ギャルのパンティおくれーーーーーーっ！！！！！".as_bytes();
 
-#[map(name = "EVENTS")]
-static EVENTS: PerfEventByteArray = PerfEventByteArray::new(0);
+#[map]
+static EVENTS: PerfEventArray<Packet> = PerfEventArray::<Packet>::new(0);
 
 #[xdp]
 pub fn woolong(ctx: XdpContext) -> u32 {
@@ -32,17 +34,19 @@ fn try_woolong(ctx: XdpContext) -> Result<u32, ()> {
 
     let (source_port, _dest_port) = get_ports(tcphdr);
 
-    if source_port == 7777 && payload_eq_slice(&ctx, payload_offset, SHENRON_WORD_SLICE) {
-        swap_macaddrs(ethhdr);
-        swap_ipv4addrs(ipv4hdr);
-        swap_ports(tcphdr);
-        rewrite_payload(&ctx, WOOLONG_WORD_SLICE)?;
-        rewrite_seq_ack(tcphdr, WOOLONG_WORD_SLICE.len())?;
-        rewrite_flags(tcphdr)?;
-        recalc_ipv4_csum(ipv4hdr);
-        recalc_tcp_csum(&ctx, ipv4hdr, tcphdr)?;
-        send_data_for_user(&ctx);
-        return Ok(xdp_action::XDP_TX);
+    if source_port == 7777 {
+        if payload_eq_slice(&ctx, payload_offset, SHENRON_WORD_SLICE) {
+            send_data_for_user(&ctx); // 変化前のパケットをユーザ空間に送る
+            swap_macaddrs(ethhdr);
+            swap_ipv4addrs(ipv4hdr);
+            swap_ports(tcphdr);
+            rewrite_payload(&ctx, WOOLONG_WORD_SLICE)?;
+            rewrite_seq_ack(tcphdr,WOOLONG_WORD_SLICE.len())?;
+            rewrite_flags(tcphdr)?;
+            recalc_tcp_csum(&ctx, ipv4hdr, tcphdr)?;
+            send_data_for_user(&ctx); // 変化後のパケットをユーザ空間に送る
+            return Ok(xdp_action::XDP_TX);
+        }
     }
     Ok(xdp_action::XDP_PASS)
 }
@@ -64,6 +68,7 @@ fn load_u64(p: *const u8) -> u64 {
     unsafe { core::ptr::read_unaligned(p as *const u64) }
 }
 
+#[inline(always)]
 fn add_carry(sum:u32, w: u16) -> u32 {
     let s = sum + w as u32;
     (s & 0xffff) + (s >> 16)
@@ -228,21 +233,29 @@ fn get_tcp_csum(ctx: &XdpContext) -> Result<u32, ()> {
 
     unsafe { (*(tcphdr as *mut TcpHdr)).check = [0, 0]; }
 
-    let tcp_sum = unsafe {
-        bpf_csum_diff(
-            0 as *mut u32,
-            0,
-            tcphdr as *mut u32,
-            tcp_length as u32,
+    let mut i: usize = 0;
+    let mut csum: u32 = 0;
+    while i < tcp_length && i < 1000 {
+        // 1バイト目
+        let p0: *const u8 = ptr_at(ctx, tcp_offset + i)?;
+        let b0 = unsafe { core::ptr::read(p0) } as u32;
+        i += 1;
+
+        // 2バイト目があれば読む、なければ 0 パディング
+        let b1 = if i < tcp_length {
+            let p1: *const u8 = ptr_at(ctx, tcp_offset + i)?;
+            let v = unsafe { core::ptr::read(p1) } as u32;
+            i += 1;
+            v
+        } else {
             0
-        )
-    };
+        };
 
-    if tcp_sum < 0 {
-        return Err(());
+        // ここで“数値”として 16bit big-endian を合成
+        let w = ((b0 << 8) | b1) as u16;
+        csum = add_carry(csum, w);
     }
-
-    Ok(tcp_sum as u32)
+    Ok(csum)
 }
 
 fn recalc_tcp_csum(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr, tcphdr: *const TcpHdr) -> Result<(), ()> {
@@ -252,28 +265,10 @@ fn recalc_tcp_csum(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr, tcphdr: *const Tcp
     unsafe { (*(tcphdr as *mut TcpHdr)).check = [0, 0]; }
 
     let total = pseudo_sum + tcp_sum;
-    let csum = fold_csum(total);
+    let csum: u16 = fold_csum(total);
 
     unsafe { (*(tcphdr as *mut TcpHdr)).check = csum.to_be_bytes(); }
     Ok(())
-}
-
-fn recalc_ipv4_csum(ipv4hdr: *const Ipv4Hdr) {
-    unsafe { (*(ipv4hdr as *mut Ipv4Hdr)).set_checksum(0) };
-    // let ihl_bytes = ((unsafe { (*ipv4hdr).vihl } & 0x0f) as usize) * 4;
-    let csum = unsafe {
-        bpf_csum_diff(
-            0 as *mut u32,
-            0,
-            ipv4hdr as *mut u32,
-            Ipv4Hdr::LEN as u32,
-            0
-        )
-    };
-    if csum >= 0 {
-        let new = fold_csum(csum as u32);
-        unsafe { (*(ipv4hdr as *mut Ipv4Hdr)).set_checksum(new); };
-    }
 }
 
 fn send_data_for_user(ctx: &XdpContext) {
@@ -281,16 +276,21 @@ fn send_data_for_user(ctx: &XdpContext) {
     let data_end = ctx.data_end() as usize;
     let pkt_len  = data_end - data;
 
-    let mut buf = [0u8; 256];
-    if data + pkt_len > data_end || pkt_len > buf.len() {
+    let mut buf = [0u8; 54];
+    if data + 54 > data_end {
+        info!(ctx, "data big");
         return
     }
 
     unsafe {
-        let _ = core::ptr::copy_nonoverlapping(data as *const u8, buf.as_mut_ptr(), pkt_len);
+        let _ = core::ptr::copy_nonoverlapping(data as *const u8, buf.as_mut_ptr(), 54);
     }
-    let slice = &buf[..pkt_len];
-    EVENTS.output(ctx, slice, 0);
+    let packet: Packet = Packet {
+        data: buf,
+        len: pkt_len as u32,
+    };
+
+    EVENTS.output(ctx, &packet, 0);
 }
 
 #[cfg(not(test))]

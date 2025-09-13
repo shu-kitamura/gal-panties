@@ -61,7 +61,7 @@ fn load_u64(p: *const u8) -> u64 {
 }
 
 #[inline(always)]
-fn add_carry(sum:u32, w: u16) -> u32 {
+fn add_carry(sum: u32, w: u16) -> u32 {
     let s = sum + w as u32;
     (s & 0xffff) + (s >> 16)
 }
@@ -72,7 +72,6 @@ fn fold_csum(mut csum: u32) -> u16 {
     csum = (csum & 0xffff) + (csum >> 16);
     !(csum as u16)
 }
-
 
 fn get_ipv4hdr(ctx: &XdpContext, ethhdr: *const EthHdr) -> Option<*const Ipv4Hdr> {
     match unsafe { *ethhdr }.ether_type() {
@@ -87,7 +86,7 @@ fn get_tcphdr(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr) -> Option<*const TcpHdr
             let ihl = ((unsafe { (*ipv4hdr).vihl } & 0x0f) as usize) * 4;
             ptr_at(ctx, EthHdr::LEN + ihl).ok()
         }
-        _ => None // 今回は TCP 以外は考慮しない
+        _ => None, // 今回は TCP 以外は考慮しない
     }
 }
 
@@ -105,7 +104,9 @@ fn get_data_length(ipv4hdr: *const Ipv4Hdr, tcphdr: *const TcpHdr) -> usize {
 }
 
 fn payload_eq_slice(ctx: &XdpContext, off: usize, pat: &[u8]) -> bool {
-    if pat.len() < 8 { return false; }
+    if pat.len() < 8 {
+        return false;
+    }
 
     let start = ctx.data();
     let end = ctx.data_end();
@@ -114,7 +115,7 @@ fn payload_eq_slice(ctx: &XdpContext, off: usize, pat: &[u8]) -> bool {
     if p + 8 > end {
         return false;
     }
-    
+
     let payload_head = load_u64(p as *const u8);
     let pattern_head = load_u64(pat.as_ptr());
 

@@ -1,4 +1,3 @@
-
 use aya_ebpf::programs::XdpContext;
 use network_types::{eth::EthHdr, ip::Ipv4Hdr, tcp::TcpHdr};
 
@@ -10,35 +9,54 @@ pub fn swap_macaddrs(ethhdr: *const EthHdr) {
     let src_mac = unsafe { (*ethhdr).src_addr };
     let dst_mac = unsafe { (*ethhdr).dst_addr };
 
-    unsafe { (*(ethhdr as *mut EthHdr)).src_addr = dst_mac; }
-    unsafe { (*(ethhdr as *mut EthHdr)).dst_addr = src_mac; }
+    unsafe {
+        (*(ethhdr as *mut EthHdr)).src_addr = dst_mac;
+    }
+    unsafe {
+        (*(ethhdr as *mut EthHdr)).dst_addr = src_mac;
+    }
 }
 
 pub fn swap_ipv4addrs(ipv4hdr: *const Ipv4Hdr) {
     let src_ip = unsafe { (*ipv4hdr).src_addr };
     let dst_ip = unsafe { (*ipv4hdr).dst_addr };
 
-    unsafe { (*(ipv4hdr as *mut Ipv4Hdr)).src_addr = dst_ip; }
-    unsafe { (*(ipv4hdr as *mut Ipv4Hdr)).dst_addr = src_ip; }
+    unsafe {
+        (*(ipv4hdr as *mut Ipv4Hdr)).src_addr = dst_ip;
+    }
+    unsafe {
+        (*(ipv4hdr as *mut Ipv4Hdr)).dst_addr = src_ip;
+    }
 }
 
 pub fn swap_ports(tcphdr: *const TcpHdr) {
     let src_port = unsafe { (*tcphdr).source };
     let dst_port = unsafe { (*tcphdr).dest };
 
-    unsafe { (*(tcphdr as *mut TcpHdr)).source = dst_port; }
-    unsafe { (*(tcphdr as *mut TcpHdr)).dest = src_port; }
+    unsafe {
+        (*(tcphdr as *mut TcpHdr)).source = dst_port;
+    }
+    unsafe {
+        (*(tcphdr as *mut TcpHdr)).dest = src_port;
+    }
 }
 
-pub fn rewrite_payload(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr, tcphdr: *const TcpHdr, new: &[u8]) -> Result<(), ()> {
+pub fn rewrite_payload(
+    ctx: &XdpContext,
+    ipv4hdr: *const Ipv4Hdr,
+    tcphdr: *const TcpHdr,
+    new: &[u8],
+) -> Result<(), ()> {
     let start = ctx.data();
     let end = ctx.data_end();
 
     let payload_offset = EthHdr::LEN + Ipv4Hdr::LEN + TcpHdr::LEN;
     let payload_length = get_data_length(ipv4hdr, tcphdr);
     let ptr: *const u8 = ptr_at(ctx, payload_offset)?;
-    
-    if new.len() != payload_length { return Err(()) }
+
+    if new.len() != payload_length {
+        return Err(());
+    }
 
     if start + payload_offset + payload_length > end {
         return Err(());
@@ -47,9 +65,11 @@ pub fn rewrite_payload(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr, tcphdr: *const
     let mut i = 0;
     while i < payload_length {
         let np = unsafe { *new.get_unchecked(i) };
-        unsafe { core::ptr::write_unaligned((ptr as *mut u8).wrapping_add(i), np); }
+        unsafe {
+            core::ptr::write_unaligned((ptr as *mut u8).wrapping_add(i), np);
+        }
         i += 1;
-    };
+    }
     Ok(())
 }
 
@@ -66,8 +86,12 @@ pub fn rewrite_seq_ack(ipv4hdr: *const Ipv4Hdr, tcphdr: *const TcpHdr) -> Result
     let new_seq = old_ack;
     let new_ack = old_seq.wrapping_add(inc as u32);
 
-    unsafe { (*(tcphdr as *mut TcpHdr)).seq = new_seq.to_be_bytes(); }
-    unsafe { (*(tcphdr as *mut TcpHdr)).ack_seq = new_ack.to_be_bytes(); }
+    unsafe {
+        (*(tcphdr as *mut TcpHdr)).seq = new_seq.to_be_bytes();
+    }
+    unsafe {
+        (*(tcphdr as *mut TcpHdr)).ack_seq = new_ack.to_be_bytes();
+    }
     Ok(())
 }
 
@@ -90,7 +114,7 @@ fn get_pseudo_header(ipv4hdr: *const Ipv4Hdr) -> u32 {
     let dst_hi = u16::from_be_bytes([dst_addr[0], dst_addr[1]]);
     let dst_lo = u16::from_be_bytes([dst_addr[2], dst_addr[3]]);
     let proto: u16 = TCP_PROTO_TYPE;
-    let tcp_len: u16= get_tcp_length(ipv4hdr);
+    let tcp_len: u16 = get_tcp_length(ipv4hdr);
 
     let mut sum: u32 = 0;
 
@@ -120,7 +144,9 @@ fn get_tcp_csum(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr) -> Result<u32, ()> {
         return Err(());
     }
 
-    unsafe { (*(tcphdr as *mut TcpHdr)).check = [0, 0]; }
+    unsafe {
+        (*(tcphdr as *mut TcpHdr)).check = [0, 0];
+    }
 
     let mut i: usize = 0;
     let mut csum: u32 = 0;
@@ -147,15 +173,23 @@ fn get_tcp_csum(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr) -> Result<u32, ()> {
     Ok(csum)
 }
 
-pub fn recalc_tcp_csum(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr, tcphdr: *const TcpHdr) -> Result<(), ()> {
+pub fn recalc_tcp_csum(
+    ctx: &XdpContext,
+    ipv4hdr: *const Ipv4Hdr,
+    tcphdr: *const TcpHdr,
+) -> Result<(), ()> {
     let pseudo_sum = get_pseudo_header(ipv4hdr);
     let tcp_sum = get_tcp_csum(ctx, ipv4hdr)?;
 
-    unsafe { (*(tcphdr as *mut TcpHdr)).check = [0, 0]; }
+    unsafe {
+        (*(tcphdr as *mut TcpHdr)).check = [0, 0];
+    }
 
     let total = pseudo_sum + tcp_sum;
     let csum: u16 = fold_csum(total);
 
-    unsafe { (*(tcphdr as *mut TcpHdr)).check = csum.to_be_bytes(); }
+    unsafe {
+        (*(tcphdr as *mut TcpHdr)).check = csum.to_be_bytes();
+    }
     Ok(())
 }

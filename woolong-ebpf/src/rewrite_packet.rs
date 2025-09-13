@@ -2,10 +2,9 @@
 use aya_ebpf::programs::XdpContext;
 use network_types::{eth::EthHdr, ip::Ipv4Hdr, tcp::TcpHdr};
 
-use crate::{add_carry, fold_csum, ptr_at};
+use crate::{add_carry, fold_csum, get_data_length, ptr_at};
 
-const SHENRON_WORD_SLICE: &[u8] = "願いを言え。どんな願いもひとつだけ叶えてやろう".as_bytes();
-const WOOLONG_WORD_SLICE: &[u8] = "ギャルのパンティおくれーーーーーーっ！！！！！".as_bytes();
+const TCP_PROTO_TYPE: u16 = 0x0006;
 
 pub fn swap_macaddrs(ethhdr: *const EthHdr) {
     let src_mac = unsafe { (*ethhdr).src_addr };
@@ -31,34 +30,38 @@ pub fn swap_ports(tcphdr: *const TcpHdr) {
     unsafe { (*(tcphdr as *mut TcpHdr)).dest = src_port; }
 }
 
-pub fn rewrite_payload(ctx: &XdpContext, new: &[u8]) -> Result<(), ()> {
+pub fn rewrite_payload(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr, tcphdr: *const TcpHdr, new: &[u8]) -> Result<(), ()> {
     let start = ctx.data();
     let end = ctx.data_end();
 
     let payload_offset = EthHdr::LEN + Ipv4Hdr::LEN + TcpHdr::LEN;
+    let payload_length = get_data_length(ipv4hdr, tcphdr);
+    let ptr: *const u8 = ptr_at(ctx, payload_offset)?;
     
-    if new.len() != SHENRON_WORD_SLICE.len() { return Err(()) }
+    if new.len() != payload_length { return Err(()) }
 
-    if start + payload_offset + SHENRON_WORD_SLICE.len() > end {
+    if start + payload_offset + payload_length > end {
         return Err(());
     }
 
-    let mut i = 0usize;
-    while i < SHENRON_WORD_SLICE.len() {
+    let mut i = 0;
+    while i < payload_length {
         let np = unsafe { *new.get_unchecked(i) };
-        unsafe { core::ptr::write_unaligned((start + payload_offset + i) as *mut u8, np); }
+        unsafe { core::ptr::write_unaligned((ptr as *mut u8).wrapping_add(i), np); }
         i += 1;
     };
     Ok(())
 }
 
-pub fn rewrite_seq_ack(tcphdr: *const TcpHdr, payload_len: usize) -> Result<(), ()> {
+pub fn rewrite_seq_ack(ipv4hdr: *const Ipv4Hdr, tcphdr: *const TcpHdr) -> Result<(), ()> {
     let old_seq = u32::from_be_bytes(unsafe { (*tcphdr).seq });
     let old_ack = u32::from_be_bytes(unsafe { (*tcphdr).ack_seq });
 
+    let payload_length = get_data_length(ipv4hdr, tcphdr);
+
     let syn = unsafe { (*tcphdr).syn() != 0 };
     let fin = unsafe { (*tcphdr).fin() != 0 };
-    let inc = payload_len + if syn { 1 } else { 0 } + if fin { 1 } else { 0 };
+    let inc = payload_length + if syn { 1 } else { 0 } + if fin { 1 } else { 0 };
 
     let new_seq = old_ack;
     let new_ack = old_seq.wrapping_add(inc as u32);
@@ -86,7 +89,7 @@ fn get_pseudo_header(ipv4hdr: *const Ipv4Hdr) -> u32 {
     let src_lo = u16::from_be_bytes([src_addr[2], src_addr[3]]);
     let dst_hi = u16::from_be_bytes([dst_addr[0], dst_addr[1]]);
     let dst_lo = u16::from_be_bytes([dst_addr[2], dst_addr[3]]);
-    let proto: u16 = 0x0006;
+    let proto: u16 = TCP_PROTO_TYPE;
     let tcp_len: u16= get_tcp_length(ipv4hdr);
 
     let mut sum: u32 = 0;
@@ -104,12 +107,13 @@ fn get_tcp_length(ipv4hdr: *const Ipv4Hdr) -> u16 {
     tot_len - ihl
 }
 
-fn get_tcp_csum(ctx: &XdpContext) -> Result<u32, ()> {
+// TODO: 汚いコードになっている
+fn get_tcp_csum(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr) -> Result<u32, ()> {
     let start = ctx.data();
     let end = ctx.data_end();
 
     let tcp_offset = EthHdr::LEN + Ipv4Hdr::LEN;
-    let tcp_length = TcpHdr::LEN + WOOLONG_WORD_SLICE.len();
+    let tcp_length = get_tcp_length(ipv4hdr) as usize;
     let tcphdr: *const TcpHdr = ptr_at(ctx, tcp_offset)?;
 
     if start + tcp_offset + tcp_length > end {
@@ -145,7 +149,7 @@ fn get_tcp_csum(ctx: &XdpContext) -> Result<u32, ()> {
 
 pub fn recalc_tcp_csum(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr, tcphdr: *const TcpHdr) -> Result<(), ()> {
     let pseudo_sum = get_pseudo_header(ipv4hdr);
-    let tcp_sum = get_tcp_csum(ctx)?;
+    let tcp_sum = get_tcp_csum(ctx, ipv4hdr)?;
 
     unsafe { (*(tcphdr as *mut TcpHdr)).check = [0, 0]; }
 

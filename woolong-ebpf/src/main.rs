@@ -34,8 +34,8 @@ fn try_woolong(ctx: XdpContext) -> Result<u32, ()> {
         rewrite_packet::swap_macaddrs(ethhdr);
         rewrite_packet::swap_ipv4addrs(ipv4hdr);
         rewrite_packet::swap_ports(tcphdr);
-        rewrite_packet::rewrite_payload(&ctx, WOOLONG_WORD_SLICE)?;
-        rewrite_packet::rewrite_seq_ack(tcphdr,WOOLONG_WORD_SLICE.len())?;
+        rewrite_packet::rewrite_payload(&ctx, ipv4hdr, tcphdr, WOOLONG_WORD_SLICE)?;
+        rewrite_packet::rewrite_seq_ack(ipv4hdr, tcphdr)?;
         rewrite_packet::rewrite_flags(tcphdr)?;
         rewrite_packet::recalc_tcp_csum(&ctx, ipv4hdr, tcphdr)?;
         return Ok(xdp_action::XDP_TX);
@@ -95,6 +95,13 @@ fn get_ports(tcphdr: *const TcpHdr) -> (u16, u16) {
     let src_port: u16 = u16::from_be_bytes(unsafe { (*tcphdr).source });
     let dst_port: u16 = u16::from_be_bytes(unsafe { (*tcphdr).dest });
     (src_port, dst_port)
+}
+
+fn get_data_length(ipv4hdr: *const Ipv4Hdr, tcphdr: *const TcpHdr) -> usize {
+    let tot_len = u16::from_be_bytes(unsafe { (*ipv4hdr).tot_len }) as usize;
+    let ihl = ((unsafe { (*ipv4hdr).vihl } & 0x0f) as usize) * 4;
+    let doff = ((unsafe { (*tcphdr).doff() } as usize) * 4) as usize;
+    tot_len - ihl - doff
 }
 
 fn payload_eq_slice(ctx: &XdpContext, off: usize, pat: &[u8]) -> bool {

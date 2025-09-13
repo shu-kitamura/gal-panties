@@ -1,8 +1,7 @@
 #![no_std]
 #![no_main]
 
-use aya_ebpf::{bindings::xdp_action, macros::{map, xdp}, maps::PerfEventArray, programs::XdpContext};
-use aya_log_ebpf::info;
+use aya_ebpf::{bindings::xdp_action, macros::xdp, programs::XdpContext};
 use core::mem;
 use network_types::{
     eth::{EthHdr, EtherType},
@@ -10,13 +9,8 @@ use network_types::{
     tcp::TcpHdr,
 };
 
-use woolong_common::Packet;
-
 const SHENRON_WORD_SLICE: &[u8] = "願いを言え。どんな願いもひとつだけ叶えてやろう".as_bytes();
 const WOOLONG_WORD_SLICE: &[u8] = "ギャルのパンティおくれーーーーーーっ！！！！！".as_bytes();
-
-#[map]
-static EVENTS: PerfEventArray<Packet> = PerfEventArray::<Packet>::new(0);
 
 #[xdp]
 pub fn woolong(ctx: XdpContext) -> u32 {
@@ -36,7 +30,6 @@ fn try_woolong(ctx: XdpContext) -> Result<u32, ()> {
 
     if source_port == 7777 {
         if payload_eq_slice(&ctx, payload_offset, SHENRON_WORD_SLICE) {
-            send_data_for_user(&ctx); // 変化前のパケットをユーザ空間に送る
             swap_macaddrs(ethhdr);
             swap_ipv4addrs(ipv4hdr);
             swap_ports(tcphdr);
@@ -44,7 +37,6 @@ fn try_woolong(ctx: XdpContext) -> Result<u32, ()> {
             rewrite_seq_ack(tcphdr,WOOLONG_WORD_SLICE.len())?;
             rewrite_flags(tcphdr)?;
             recalc_tcp_csum(&ctx, ipv4hdr, tcphdr)?;
-            send_data_for_user(&ctx); // 変化後のパケットをユーザ空間に送る
             return Ok(xdp_action::XDP_TX);
         }
     }
@@ -269,28 +261,6 @@ fn recalc_tcp_csum(ctx: &XdpContext, ipv4hdr: *const Ipv4Hdr, tcphdr: *const Tcp
 
     unsafe { (*(tcphdr as *mut TcpHdr)).check = csum.to_be_bytes(); }
     Ok(())
-}
-
-fn send_data_for_user(ctx: &XdpContext) {
-    let data     = ctx.data() as usize;
-    let data_end = ctx.data_end() as usize;
-    let pkt_len  = data_end - data;
-
-    let mut buf = [0u8; 54];
-    if data + 54 > data_end {
-        info!(ctx, "data big");
-        return
-    }
-
-    unsafe {
-        let _ = core::ptr::copy_nonoverlapping(data as *const u8, buf.as_mut_ptr(), 54);
-    }
-    let packet: Packet = Packet {
-        data: buf,
-        len: pkt_len as u32,
-    };
-
-    EVENTS.output(ctx, &packet, 0);
 }
 
 #[cfg(not(test))]

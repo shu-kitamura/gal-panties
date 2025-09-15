@@ -1,14 +1,25 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
-const HOST: &str = "172.10.10.77";
-const PORT: &str = "7777";
+use clap::Parser;
+
+const DEFAULT_IPADDR: &str = "172.10.10.77";
+
+#[derive(Debug, Parser)]
+struct Opt {
+    #[clap(short, long, default_value = "eth0")]
+    iface: String,
+
+    #[clap(short, long, default_value = "7777")]
+    port: String,
+}
 
 fn main() -> std::io::Result<()> {
-    let addr = format!("{}:{}", HOST, PORT);
-    let listener = TcpListener::bind(addr)?;
+    let opt = Opt::parse();
+    let ipv4addr = get_ipv4addr(&opt.iface);
+    let addr_port = format!("{}:{}", ipv4addr, opt.port);
+    let listener = TcpListener::bind(addr_port)?;
 
-    // シングルスレッドで逐次処理
     for stream_res in listener.incoming() {
         let mut stream = match stream_res {
             Ok(s) => s,
@@ -56,4 +67,17 @@ fn main() -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+fn get_ipv4addr(iface: &str) -> String {
+    let iface = pnet::datalink::interfaces()
+        .into_iter()
+        .find(|i| i.name == iface)
+        .expect("Failed to get interface");
+    let addr = iface.ips.iter().find(|ip| ip.is_ipv4());
+    if let Some(ip_network) = addr {
+        return ip_network.ip().to_string();
+    } else {
+        return DEFAULT_IPADDR.to_string();
+    }
 }

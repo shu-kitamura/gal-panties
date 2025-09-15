@@ -1,14 +1,24 @@
 use std::io::{self, BufRead, Read, Write};
 use std::net::TcpStream;
 
-const HOST: &str = "172.10.10.77";
-const PORT: &str = "7777";
+use clap::Parser;
+
+const DEFAULT_ADDR: &str = "172.10.10.77";
+const DEFAULT_PORT: &str = "7777";
+
+#[derive(Debug, Parser)]
+struct Opt {
+    #[clap(short, long, default_value = DEFAULT_ADDR)]
+    ipv4addr: String,
+
+    #[clap(short, long, default_value = DEFAULT_PORT)]
+    port: String,
+}
 
 fn main() -> std::io::Result<()> {
-    let addr = format!("{}:{}", HOST, PORT);
-    let mut stream = TcpStream::connect(&addr)?;
-
-    println!("type message to send. type /quit to disconnect.");
+    let opt = Opt::parse();
+    let addr_port = format!("{}:{}", opt.ipv4addr, opt.port);
+    let mut stream = TcpStream::connect(&addr_port)?;
 
     first_connection(&mut stream)?;
 
@@ -40,8 +50,7 @@ fn main() -> std::io::Result<()> {
             println!("server closed the connection");
             break;
         }
-        let resp = String::from_utf8_lossy(&buf[..n]);
-        println!("> {}", resp);
+        let _resp = String::from_utf8_lossy(&buf[..n]);
     }
 
     Ok(())
@@ -55,8 +64,7 @@ fn first_connection(stream: &mut TcpStream) -> std::io::Result<()> {
 
     let mut buf = [0u8; 1024];
     let n = stream.read(&mut buf)?;
-    let resp = String::from_utf8_lossy(&buf[..n]);
-    println!("> {}", resp);
+    let _resp = String::from_utf8_lossy(&buf[..n]);
 
     Ok(())
 }

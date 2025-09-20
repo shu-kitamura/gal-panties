@@ -3,21 +3,18 @@ use std::net::TcpStream;
 
 use clap::Parser;
 
-const DEFAULT_ADDR: &str = "172.10.10.77";
-const DEFAULT_PORT: &str = "7777";
-
 #[derive(Debug, Parser)]
 struct Opt {
-    #[clap(short, long, default_value = DEFAULT_ADDR)]
-    ipv4addr: String,
+    #[clap(short, long)]
+    addr: String,
 
-    #[clap(short, long, default_value = DEFAULT_PORT)]
+    #[clap(short, long, default_value = "7777")]
     port: String,
 }
 
 fn main() -> std::io::Result<()> {
     let opt = Opt::parse();
-    let addr_port = format!("{}:{}", opt.ipv4addr, opt.port);
+    let addr_port = format!("{}:{}", opt.addr, opt.port);
     let mut stream = TcpStream::connect(&addr_port)?;
 
     first_connection(&mut stream)?;

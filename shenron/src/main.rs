@@ -76,8 +76,8 @@ fn get_ipv4addr(iface: &str) -> String {
         .expect("Failed to get interface");
     let addr = iface.ips.iter().find(|ip| ip.is_ipv4());
     if let Some(ip_network) = addr {
-        return ip_network.ip().to_string();
+        ip_network.ip().to_string()
     } else {
-        return DEFAULT_IPADDR.to_string();
+        DEFAULT_IPADDR.to_string()
     }
 }

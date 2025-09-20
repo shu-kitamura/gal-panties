@@ -19,8 +19,6 @@ fn main() -> std::io::Result<()> {
     let addr_port = format!("{}:{}", opt.addr, opt.port);
     let mut stream = TcpStream::connect(&addr_port)?;
 
-    first_connection(&mut stream)?;
-
     let stdin = io::stdin();
     let mut buf = [0u8; 1024];
 
@@ -51,19 +49,6 @@ fn main() -> std::io::Result<()> {
         }
         let _resp = String::from_utf8_lossy(&buf[..n]);
     }
-
-    Ok(())
-}
-
-fn first_connection(stream: &mut TcpStream) -> std::io::Result<()> {
-    let spell = "いでよ ドラゴン";
-    println!("{}", spell);
-    stream.write_all(spell.as_bytes())?;
-    stream.flush()?;
-
-    let mut buf = [0u8; 1024];
-    let n = stream.read(&mut buf)?;
-    let _resp = String::from_utf8_lossy(&buf[..n]);
 
     Ok(())
 }

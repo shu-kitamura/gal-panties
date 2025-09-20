@@ -5,9 +5,11 @@ use clap::Parser;
 
 #[derive(Debug, Parser)]
 struct Opt {
+    /// Network interface to bind
     #[clap(short, long, default_value = "eth0")]
     iface: String,
 
+    /// Port to listen on
     #[clap(short, long, default_value = "7777")]
     port: String,
 }

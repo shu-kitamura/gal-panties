@@ -5,9 +5,11 @@ use clap::Parser;
 
 #[derive(Debug, Parser)]
 struct Opt {
-    #[clap(short, long)]
+    /// Server IPv4 address to connect
+    #[clap(short, long, required = true)]
     addr: String,
 
+    /// Server port to connect
     #[clap(short, long, default_value = "7777")]
     port: String,
 }

@@ -3,8 +3,6 @@ use std::net::TcpListener;
 
 use clap::Parser;
 
-const DEFAULT_IPADDR: &str = "172.10.10.77";
-
 #[derive(Debug, Parser)]
 struct Opt {
     #[clap(short, long, default_value = "eth0")]
@@ -74,10 +72,10 @@ fn get_ipv4addr(iface: &str) -> String {
         .into_iter()
         .find(|i| i.name == iface)
         .expect("Failed to get interface");
-    let addr = iface.ips.iter().find(|ip| ip.is_ipv4());
-    if let Some(ip_network) = addr {
-        ip_network.ip().to_string()
-    } else {
-        DEFAULT_IPADDR.to_string()
-    }
+    let addr = iface
+        .ips
+        .iter()
+        .find(|ip| ip.is_ipv4())
+        .expect("Failed to get IPv4 address");
+    addr.ip().to_string()
 }

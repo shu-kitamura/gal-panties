@@ -47,7 +47,6 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
 
     let ctrl_c = signal::ctrl_c();
-    println!("Waiting for Ctrl-C...");
     ctrl_c.await?;
     println!("Exiting...");
 

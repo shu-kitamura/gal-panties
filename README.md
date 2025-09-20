@@ -15,11 +15,12 @@ shenron と pilaf の通信に woolong が横入りします。（shenron, pilaf
 2. shenron が pilaf に「願いを言え。どんな願いもひとつだけ叶えてやろう」というパケットを送信
 3. woolong が「2」のパケットのペイロードを「ギャルのパンティおくれーーーーーーっ！！！！！」に書き換えて、送り返す。
 
-## 環境
+## 実行環境
 
 - Linux 環境（動作確認は Ubuntu 24.04 で実施）
 - Rust
-- [Development Environment](https://aya-rs.dev/book/start/development/)を参照して、必要なツールをインストールしてください。  
+- Aya
+   - [Development Environment](https://aya-rs.dev/book/start/development/)を参照して、必要なツールをインストールしてください。  
 
 ## 実行手順
 
